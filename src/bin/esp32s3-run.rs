@@ -10,9 +10,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Parser;
-use esp32s3_emu::devices::efuse::Efuse;
-use esp32s3_emu::devices::{PeripheralsConfig, STRAP_SPI_BOOT};
-use esp32s3_emu::machine::{Esp32s3, Esp32s3Config, Event, TICK_HZ};
+use esp32s3_rax::devices::efuse::Efuse;
+use esp32s3_rax::devices::{PeripheralsConfig, STRAP_SPI_BOOT};
+use esp32s3_rax::machine::{Esp32s3, Esp32s3Config, Event, TICK_HZ};
 use rax::isa::xtensa::Profile;
 use rax::isa::xtensa::generated::opcodes::{MNEMONICS, OPCODE_COUNT};
 
@@ -20,7 +20,7 @@ use rax::isa::xtensa::generated::opcodes::{MNEMONICS, OPCODE_COUNT};
 #[command(about = "Run an ESP32-S3 flash image")]
 struct Args {
     /// Internal ROM image (esp32s3_rev0_rom.bin).
-    #[arg(long, default_value = esp32s3_emu::DEFAULT_ROM)]
+    #[arg(long, default_value = esp32s3_rax::DEFAULT_ROM)]
     rom: PathBuf,
     /// Flash image (bootloader, partition table and application).
     #[arg(long)]

@@ -55,7 +55,7 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         NetworkConfig {
-            ssid: "bitaxe-emu".into(),
+            ssid: "esp32s3-rax".into(),
             bssid: [0x02, 0xe5, 0x00, 0x00, 0x00, 0x01],
             channel: 1,
             trace: false,

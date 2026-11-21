@@ -165,11 +165,9 @@ impl AccessPoint {
                         ));
                     }
                 }
-                wlan::DEAUTH | wlan::DISASSOC => {
-                    if self.stations.remove(&sta).is_some() {
-                        self.events
-                            .push_back(format!("station {} left", wlan::fmt_mac(&sta)));
-                    }
+                wlan::DEAUTH | wlan::DISASSOC if self.stations.remove(&sta).is_some() => {
+                    self.events
+                        .push_back(format!("station {} left", wlan::fmt_mac(&sta)));
                 }
                 _ => {}
             }

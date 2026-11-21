@@ -252,7 +252,7 @@ impl WifiMac {
                 self.tsf_latch = (v & 0b11 != 0).then(|| self.tsf_us(now));
             }
             o if (TX_PLCP0 - 8 * (TX_SLOTS as u32 - 1)..=TX_PLCP0).contains(&o)
-                && (TX_PLCP0 - o) % 8 == 0
+                && (TX_PLCP0 - o).is_multiple_of(8)
                 && v & PLCP0_GO == PLCP0_GO =>
             {
                 self.pending = true;

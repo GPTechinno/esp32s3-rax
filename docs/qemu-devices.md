@@ -1,4 +1,4 @@
-[← rax README](../../README.md)
+[← README](../README.md)
 
 # ESP32-S3 peripheral behaviour in Espressif QEMU: register-level spec
 
