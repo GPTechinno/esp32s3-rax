@@ -9,8 +9,10 @@
 //! each ADC1 channel ([`Sens::set_adc1_mv`]); the ADC2 channels read 0 V. The
 //! converters are linear through their calibration point, which the eFuses
 //! hold, apart from a small deviation that the curve-fitting calibration
-//! removes. The touch sensor, the temperature sensor and the ULP
-//! coprocessor do not run.
+//! removes. The temperature sensor reads the die temperature
+//! ([`Sens::die_temp_c`]) as soon as TSENS_DUMP_OUT is set: TSENS_READY rises
+//! with the code in TSENS_OUT. The touch sensor and the ULP coprocessor do not
+//! run.
 
 /// ADC1 input channels (channel `n` is GPIO `n + 1`).
 pub const ADC1_CHANNELS: usize = 10;
@@ -74,6 +76,11 @@ const EN_PAD_MASK: u32 = 0xfff;
 const SLAVE_ADDR1_MEAS_STATUS: u32 = 0x3fc0_0000;
 /// SAR_TSENS_CTRL.TSENS_OUT and TSENS_READY.
 const TSENS_CTRL_STATUS: u32 = 0x1ff;
+const TSENS_READY: u32 = 1 << 8;
+const TSENS_DUMP_OUT: u32 = 1 << 24;
+/// Die temperature of a TSENS_OUT code, offset 0: `ADC_FACTOR × code - OFFSET` °C.
+const TSENS_ADC_FACTOR: f32 = 0.4386;
+const TSENS_OFFSET: f32 = 20.52;
 
 /// Reset values of the registers that do not reset to 0.
 const RESET: [(u32, u32); 13] = [
@@ -110,6 +117,8 @@ pub struct Sens {
     regs: [u32; (SIZE / 4) as usize],
     /// Input voltage of each ADC1 channel, in mV.
     pub adc1_mv: [u32; ADC1_CHANNELS],
+    /// Temperature the temperature sensor reads, °C.
+    pub die_temp_c: f32,
 }
 
 impl Default for Sens {
@@ -123,6 +132,7 @@ impl Sens {
         let mut s = Sens {
             regs: [0; (SIZE / 4) as usize],
             adc1_mv: [0; ADC1_CHANNELS],
+            die_temp_c: 40.0,
         };
         s.reset();
         s
@@ -177,10 +187,19 @@ impl Sens {
                     new = self.meas(old, new, |s, pads| {
                         s.adc_code(1, pads, ATTEN2, &[0; ADC2_CHANNELS])
                     });
+                } else if off == TSENS_CTRL && new & TSENS_DUMP_OUT != 0 {
+                    new = (new & !TSENS_CTRL_STATUS) | TSENS_READY | self.tsens_code();
                 }
                 self.set(off, new);
             }
         }
+    }
+
+    /// The TSENS_OUT code of the die temperature.
+    fn tsens_code(&self) -> u32 {
+        ((self.die_temp_c + TSENS_OFFSET) / TSENS_ADC_FACTOR)
+            .round()
+            .clamp(0.0, 255.0) as u32
     }
 
     /// SAR_MEASn_CTRL2 after a write that changed it from `old` to `new`;
@@ -321,6 +340,21 @@ mod tests {
     fn calibrated_mv(unit: usize, atten: u32, raw: u32) -> f64 {
         let v = f64::from(raw) * f64::from(CAL_MV) / f64::from(calibration_code(unit, atten));
         v - deviation(unit, atten, v)
+    }
+
+    #[test]
+    fn the_temperature_sensor_reads_the_die_temperature() {
+        let mut s = Sens::new();
+        assert_eq!(s.read(TSENS_CTRL) & TSENS_READY, 0);
+        let ctrl = s.read(TSENS_CTRL);
+        s.write(TSENS_CTRL, ctrl | TSENS_DUMP_OUT);
+        let v = s.read(TSENS_CTRL);
+        assert_ne!(v & TSENS_READY, 0);
+        let temp = TSENS_ADC_FACTOR * (v & 0xff) as f32 - TSENS_OFFSET;
+        assert!((temp - 40.0).abs() < 0.5, "{temp} °C");
+        // the reading stays once the dump is over
+        s.write(TSENS_CTRL, v & !TSENS_DUMP_OUT);
+        assert_ne!(s.read(TSENS_CTRL) & TSENS_READY, 0);
     }
 
     #[test]

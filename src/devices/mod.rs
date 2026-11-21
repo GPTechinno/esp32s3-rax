@@ -132,6 +132,9 @@ const REGFILES: &[(u32, u32, &str)] = &[
     (0x6001_6000, 0x1000, "rmt"),
     (0x6001_9000, 0x1000, "ledc"),
     (0x6002_6000, 0x1000, "apb_ctrl"),
+    // Bluetooth controller: the lookup table of the exchange memory pages
+    // (0x204..), which the ROM reads back to address them.
+    (0x6003_1000, 0x1000, "bt"),
     (0x6003_9000, 0x1000, "usb_wrap"),
     (0x6004_0000, 0x1000, "apb_saradc"),
     (0x600c_1000, 0x1000, "sensitive"),
@@ -145,6 +148,14 @@ impl Peripherals {
             .iter()
             .map(|&(base, size, name)| {
                 let mut rf = RegFile::new(name, size);
+                if name == "bt" {
+                    // The controller's version (0x004). Its requests by bit 31
+                    // (0x000, and sampling its clock in 0x01c) complete at once.
+                    rf = rf
+                        .with_fixed(0x004, 0x0900_1b00)
+                        .with_cleared_bits(0x000, 1 << 31)
+                        .with_cleared_bits(0x01c, 1 << 31);
+                }
                 if name == "rtc_periph" || name == "apb_saradc" {
                     // The analog side (SAR ADCs, RTC IO, sensors) is not modelled.
                     rf = rf.write_only();

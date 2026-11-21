@@ -72,12 +72,16 @@ pub struct Esp32s3 {
     /// Addresses where the cores record their state in [`Esp32s3::break_log`].
     breakpoints: std::collections::BTreeSet<u32>,
     pub break_log: Vec<BreakHit>,
+    /// Hits before this time (ticks) are not recorded.
+    pub break_from: u64,
 }
 
-/// A core reached a breakpoint: its a2..a15 and call chain (PC and stack pointer).
+/// A core reached a breakpoint: the time, its a2..a15 and call chain (PC and stack pointer).
 #[derive(Clone, Debug)]
 pub struct BreakHit {
     pub core: usize,
+    /// Time of the hit, ticks.
+    pub time: u64,
     pub regs: Vec<u32>,
     pub chain: Vec<(u32, u32)>,
 }
@@ -108,6 +112,7 @@ impl Esp32s3 {
             stubs: std::collections::BTreeMap::new(),
             breakpoints: std::collections::BTreeSet::new(),
             break_log: Vec::new(),
+            break_from: 0,
         }
     }
 
@@ -120,7 +125,7 @@ impl Esp32s3 {
     }
 
     /// Records the state of the cores in [`Esp32s3::break_log`] each time they
-    /// reach `addr` (the first 16 times).
+    /// reach `addr` (the first 16 times from [`Esp32s3::break_from`]).
     pub fn add_breakpoint(&mut self, addr: u32) {
         self.breakpoints.insert(addr);
         self.cpu.set_hook(addr);
@@ -275,11 +280,20 @@ impl Esp32s3 {
                     match self.stubs.get(&cpu.pc) {
                         Some(&value) => cpu.return_from_function(value),
                         None => {
-                            if self.breakpoints.contains(&cpu.pc) && self.break_log.len() < 16 {
+                            if self.breakpoints.contains(&cpu.pc)
+                                && self.break_log.len() < 16
+                                && self.soc.now() >= self.break_from
+                            {
                                 let (wb, ws) = (cpu.sr[72], cpu.sr[73]);
                                 let regs = (2..16).map(|i| cpu.a(i)).collect();
                                 let chain = backtrace(cpu, &self.soc, wb, ws);
-                                self.break_log.push(BreakHit { core, regs, chain });
+                                let time = self.soc.now();
+                                self.break_log.push(BreakHit {
+                                    core,
+                                    time,
+                                    regs,
+                                    chain,
+                                });
                             }
                             let _ = cpu.step(&mut self.soc);
                         }
