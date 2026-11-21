@@ -126,9 +126,35 @@ A frame is announced by interrupt bit 24 (run; bit 14 too in `wDev_ProcessFiq`).
 `0x2018` (low) and `0x201c` (high), µs, which `hal_get_tsf_time` reads before clearing the bit;
 bit 5 resets the TSF (`hal_mac_tsf_reset`). `0x2028` station TSF enable (`hal_enable_sta_tsf`).
 
+## Crypto (disassembled, traced, run)
+
+The ESP32 layout (crypto control at `0x800`, key slots at `0x1400`, PLCP1 key slot field), checked
+on the S3 in `hal_crypto_set_key_entry`, `hal_crypto_clr_key_entry` and `mac_tx_set_plcp1`.
+
+| Offset | Meaning |
+|---|---|
+| `0x800`, `0x804` | Crypto control of interfaces 0 and 1: `hal_crypto_init` writes `0x0003_0000`; `hal_crypto_enable` writes `0x0003_0103` (`0x1003_0103` for one cipher family) with bit 9 for SPP, and depending on the cipher sets bits 21:6 of `0x810` and bit 31 here. The model does not use them |
+| `0x814` | Key slot enable bits: `hal_crypto_set_key_entry` sets bit n, `hal_crypto_clr_key_entry` clears it |
+| `0x1400 + 40 × n` | Key slot n (25 on the ESP32): word 0 address bytes 0-3; word 1 address bytes 4-5 (bits 15:0), algorithm (20:18, 3 for CCMP), pairwise (21), bit 22, group (23), interface (25:24), bit 27, key ID (31:30); then the key from `+8`, as little-endian words. Group keys go to slots 0-3, pairwise keys from slot 4 (traced: slot 4 for the station's PTK) |
+
+- **Transmit.** `ccmp_encap` (libnet80211) inserts the 8-byte CCMP header itself (PN0, PN1, 0,
+  key ID << 6 | ExtIV, PN2-PN5). `mac_tx_set_plcp1` writes the key slot as a byte at PLCP1 bit 17
+  (bits 21:17 on the ESP32), and the length in PLCP1 bits 11:0, like the descriptor's, counts the
+  MIC and the FCS (run: an ARP of 68 bytes with its CCMP header gives 80). There is no enable bit:
+  the MAC encrypts a frame whose Protected bit is set (run), what follows the CCMP header, and
+  appends the MIC.
+- **Receive.** `ccmp_decap` checks ExtIV and the replay counter, strips the CCMP header and takes
+  the header and the MIC off the frame's length: the MAC hands the frame over decrypted, with its
+  CCMP header. The model also writes the MIC bytes, so that the descriptor length and the signal
+  length (word 11, with the FCS) both count the MIC; which of the two the driver starts from is not
+  established. ESP-Miner and esp-miner-rs take DHCP, DNS and TCP this way (run).
+- **The supplicant** (ESP-IDF's, in both firmwares) unwraps the group key of message 3 with the AES
+  accelerator (`0x6003_A000`, typical mode); without it, message 3 is dropped and message 4 never
+  sent (run).
+
 ## Not modelled yet
 
 - TBTT and TSF timer interrupts: the chip's access point does not beacon on its own, and power
   save (not used by esp-radio by default) would not wake up.
-- The crypto engine (key slots at `0x800` on the ESP32): no WPA2.
+- WEP, TKIP, GCMP and protected management frames: only CCMP is modelled.
 - Retries, collisions and errors: every transmission succeeds.

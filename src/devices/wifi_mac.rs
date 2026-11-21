@@ -17,6 +17,14 @@
 //! append descriptors and set `RX_CTRL` bit 0, then follows the last descriptor's
 //! link.
 //!
+//! Crypto: the driver writes CCMP keys into key slots ([`KEY_SLOTS`]) and
+//! enables them in `CRYPTO_KEY_ENABLE`. A frame sent with the Protected bit
+//! already holds its CCMP header (with the PN); the MAC encrypts it with the
+//! slot of PLCP1 bits 21:17 and appends the MIC. A received protected frame is
+//! decrypted with the pairwise slot of its transmitter address, or the group
+//! slot of its key ID, on an interface the frame is for; the firmware gets it
+//! with its CCMP header, its plaintext and the MIC, and drops neither.
+//!
 //! The TSF counts microseconds from its reset. The other registers read back
 //! what was written, except in the third page, which reads 0 (the radio status
 //! registers there are polled until they clear).
@@ -25,6 +33,7 @@ use std::collections::VecDeque;
 
 use super::TICK_HZ;
 use super::gdma::DmaMemory;
+use crate::net::wpa;
 
 /// Registers: three 4 KB pages.
 pub const SIZE: u32 = 0x3000;
@@ -67,6 +76,23 @@ const PLCP0_GO: u32 = 0b11 << 30;
 const TX_PLCP1: u32 = 0x12f8;
 const TX_PMD: u32 = 0x1320;
 const TX_SLOT_STRIDE: u32 = 0x4c;
+
+/// Key slot enable bits.
+const CRYPTO_KEY_ENABLE: u32 = 0x814;
+/// Key slots, 40 bytes each: address low, address high (bits 15:0) with the
+/// key's configuration, then the key.
+const KEY_SLOTS: u32 = 0x1400;
+const KEY_SLOT_SIZE: u32 = 40;
+const KEY_SLOT_COUNT: u32 = 25;
+const KEY_ALGORITHM_SHIFT: u32 = 18;
+const KEY_ALGORITHM_CCMP: u32 = 3;
+const KEY_PAIRWISE: u32 = 1 << 21;
+const KEY_GROUP: u32 = 1 << 23;
+const KEY_INTERFACE_SHIFT: u32 = 24;
+const KEY_ID_SHIFT: u32 = 30;
+/// PLCP1: key slot of a protected frame.
+const PLCP1_KEY_SLOT_SHIFT: u32 = 17;
+const PLCP1_KEY_SLOT_MASK: u32 = 0x1f;
 
 /// MAC control: setting bit 1 starts the MAC, bit 0 then reads 1 (ready).
 const MAC_CTRL: u32 = 0xd14;
@@ -131,6 +157,10 @@ pub struct Stats {
     pub rx: u64,
     /// Received frames dropped: receive off, or no descriptor for too long.
     pub rx_dropped: u64,
+    /// Protected frames sent unencrypted (no key in their slot), and received
+    /// ones dropped (no key, or a wrong MIC).
+    pub tx_no_key: u64,
+    pub rx_undecrypted: u64,
 }
 
 impl Default for WifiMac {
@@ -289,14 +319,27 @@ impl WifiMac {
             }
             let first = self.dma_high() | (plcp0 & PLCP0_DMA_ADDR);
             let mut data = read_chain(mem, first);
-            // The descriptors count the FCS, which the MAC appends.
-            let with_fcs = (self.reg(TX_PLCP1 - TX_SLOT_STRIDE * slot as u32) & 0xfff) as usize;
-            let len = if (4..=data.len()).contains(&with_fcs) {
-                with_fcs - 4
+            // PLCP1 and the descriptors count the FCS, and the MIC of a
+            // protected frame, which the MAC appends.
+            let plcp1 = self.reg(TX_PLCP1 - TX_SLOT_STRIDE * slot as u32);
+            let protected = data
+                .get(1)
+                .is_some_and(|f| f & crate::net::ieee80211::PROTECTED != 0);
+            let trailer = 4 + if protected { wpa::CCMP_MIC } else { 0 };
+            let with_trailer = (plcp1 & 0xfff) as usize;
+            let len = if (trailer..=data.len()).contains(&with_trailer) {
+                with_trailer - trailer
             } else {
-                data.len().saturating_sub(4)
+                data.len().saturating_sub(trailer)
             };
             data.truncate(len);
+            if protected {
+                let slot = (plcp1 >> PLCP1_KEY_SLOT_SHIFT) & PLCP1_KEY_SLOT_MASK;
+                match self.key(slot).and_then(|tk| wpa::seal(&tk, &data)) {
+                    Some(sealed) => data = sealed,
+                    None => self.stats.tx_no_key += 1,
+                }
+            }
             self.stats.tx += 1;
             self.tx_frames.push_back(data);
             self.tx_busy.push((slot, now + TX_AIRTIME));
@@ -327,6 +370,43 @@ impl WifiMac {
             false
         });
         changed
+    }
+
+    /// The CCMP key of an enabled key slot.
+    fn key(&self, slot: u32) -> Option<[u8; 16]> {
+        if slot >= KEY_SLOT_COUNT || self.reg(CRYPTO_KEY_ENABLE) >> slot & 1 == 0 {
+            return None;
+        }
+        let base = KEY_SLOTS + KEY_SLOT_SIZE * slot;
+        if (self.reg(base + 4) >> KEY_ALGORITHM_SHIFT) & 7 != KEY_ALGORITHM_CCMP {
+            return None;
+        }
+        let mut key = [0u8; 16];
+        for (i, chunk) in key.chunks_mut(4).enumerate() {
+            chunk.copy_from_slice(&self.reg(base + 8 + 4 * i as u32).to_le_bytes());
+        }
+        Some(key)
+    }
+
+    /// The key slot that decrypts the protected `mpdu`, received on the
+    /// interfaces `ifaces` (bits): the pairwise key of its transmitter, or for a
+    /// group frame the group key of its key ID.
+    fn rx_key_slot(&self, mpdu: &[u8], ifaces: u32) -> Option<u32> {
+        let (_, key_id) = wpa::ccmp_header(mpdu)?;
+        let group = mpdu[4] & 1 != 0;
+        let ta = &mpdu[10..16];
+        (0..KEY_SLOT_COUNT).find(|&slot| {
+            let base = KEY_SLOTS + KEY_SLOT_SIZE * slot;
+            let (low, cfg) = (self.reg(base), self.reg(base + 4));
+            let addr = [low.to_le_bytes(), cfg.to_le_bytes()].concat();
+            self.key(slot).is_some()
+                && ifaces >> ((cfg >> KEY_INTERFACE_SHIFT) & 3) & 1 != 0
+                && if group {
+                    cfg & KEY_GROUP != 0 && cfg >> KEY_ID_SHIFT == u32::from(key_id)
+                } else {
+                    cfg & KEY_PAIRWISE != 0 && addr[..6] == *ta
+                }
+        })
     }
 
     /// The interfaces whose receive address filter `addr` passes, as bits.
@@ -362,21 +442,31 @@ impl WifiMac {
                 self.stats.rx_dropped += 1;
                 continue;
             }
+            let ifaces = self.interfaces_for(&frame.data[4..]);
+            let mut mpdu = std::borrow::Cow::Borrowed(&frame.data);
+            if frame.data[1] & crate::net::ieee80211::PROTECTED != 0 {
+                let opened = self
+                    .rx_key_slot(&frame.data, ifaces)
+                    .and_then(|slot| self.key(slot))
+                    .and_then(|tk| wpa::open(&tk, &frame.data));
+                let Some(mut opened) = opened else {
+                    self.rx_frames.pop_front();
+                    self.stats.rx_undecrypted += 1;
+                    continue;
+                };
+                opened.extend_from_slice(&frame.data[frame.data.len() - wpa::CCMP_MIC..]);
+                mpdu = std::borrow::Cow::Owned(opened);
+            }
             let mut buf = vec![0u8; RX_HEADER];
             let mut word =
                 |i: usize, v: u32| buf[4 * i..4 * i + 4].copy_from_slice(&v.to_le_bytes());
             // Non-HT, 6 Mb/s.
-            word(
-                0,
-                u32::from(frame.rssi as u8)
-                    | 0x0b << 8
-                    | self.interfaces_for(&frame.data[4..]) << 28,
-            );
+            word(0, u32::from(frame.rssi as u8) | 0x0b << 8 | ifaces << 28);
             word(2, u32::from(frame.channel & 0xf) << 16);
             word(3, self.tsf_us(now) as u32);
             word(5, u32::from(-97i8 as u8));
             word(11, (frame.data.len() as u32 + 4) & 0xfff);
-            buf.extend_from_slice(&frame.data);
+            buf.extend_from_slice(&mpdu);
             if !self.fill(mem, &buf) {
                 if self.rx_frames.len() > RX_QUEUE {
                     self.rx_frames.pop_front();
@@ -596,6 +686,128 @@ mod tests {
         assert!(mac.deliver(&mut mem, 0));
         assert!(mac.rx_frames.is_empty());
         assert_eq!(mac.read(RX_LAST, 0), (BASE + 32) & 0xf_ffff);
+    }
+
+    /// Writes a CCMP key into `slot`: for interface 0, pairwise for `addr` or
+    /// group with `key_id`.
+    fn set_key(
+        mac: &mut WifiMac,
+        slot: u32,
+        addr: [u8; 6],
+        group: bool,
+        key_id: u32,
+        key: &[u8; 16],
+    ) {
+        let base = KEY_SLOTS + KEY_SLOT_SIZE * slot;
+        mac.write(base, u32::from_le_bytes(addr[..4].try_into().unwrap()), 0);
+        let kind = if group { KEY_GROUP } else { KEY_PAIRWISE };
+        let cfg = u32::from(u16::from_le_bytes([addr[4], addr[5]]))
+            | KEY_ALGORITHM_CCMP << KEY_ALGORITHM_SHIFT
+            | kind
+            | key_id << KEY_ID_SHIFT;
+        mac.write(base + 4, cfg, 0);
+        for (i, w) in key.chunks(4).enumerate() {
+            mac.write(
+                base + 8 + 4 * i as u32,
+                u32::from_le_bytes(w.try_into().unwrap()),
+                0,
+            );
+        }
+        let enabled = mac.read(CRYPTO_KEY_ENABLE, 0);
+        mac.write(CRYPTO_KEY_ENABLE, enabled | 1 << slot, 0);
+    }
+
+    #[test]
+    fn protected_frames_are_sealed_and_opened_with_the_key_slots() {
+        use crate::net::ieee80211 as wlan;
+        let sta = [0x02, 0, 0, 0, 0, 0x01];
+        let ap = [0x02, 0, 0, 0, 0, 0x09];
+        let (ptk, gtk) = ([0x11u8; 16], [0x22u8; 16]);
+        let mut mac = WifiMac::new();
+        set_key(&mut mac, 4, ap, false, 0, &ptk);
+        set_key(&mut mac, 1, ap, true, 1, &gtk);
+
+        // transmit: the driver's frame holds the CCMP header; PLCP1 counts the
+        // MIC and the FCS and names the key slot
+        let plain = wlan::Builder::header(wlan::TYPE_DATA, 0, wlan::TO_DS, ap, sta, ap, 1)
+            .llc(0x0806, &[0x5a; 28])
+            .build();
+        let mut frame = wpa::insert_ccmp_header(&plain, 3, 0).unwrap();
+        let with_trailer = frame.len() + wpa::CCMP_MIC + 4;
+        frame.resize(with_trailer, 0);
+        let mut mem = Mem(vec![0; 0x1000]);
+        mem.put(
+            BASE,
+            DESC_OWNER | DESC_EOF | (with_trailer as u32) << 12 | with_trailer as u32,
+        );
+        mem.put(BASE + 4, BASE + 0x100);
+        for (i, w) in frame.chunks(4).enumerate() {
+            let mut b = [0; 4];
+            b[..w.len()].copy_from_slice(w);
+            mem.put(BASE + 0x100 + 4 * i as u32, u32::from_le_bytes(b));
+        }
+        mac.write(TX_PLCP1, with_trailer as u32 | 4 << PLCP1_KEY_SLOT_SHIFT, 0);
+        mac.write(TX_PLCP0, PLCP0_GO | (BASE & 0xf_ffff), 0);
+        mac.service(&mut mem, 0);
+        let sent = mac.tx_frames.pop_front().unwrap();
+        assert_eq!(sent.len(), plain.len() + wpa::CCMP_HEADER + wpa::CCMP_MIC);
+        let opened = wpa::open(&ptk, &sent).expect("sealed with the pairwise key");
+        assert_eq!(wpa::strip_ccmp_header(&opened), Some(plain));
+
+        // receive: unicast under the pairwise key, group under the group key;
+        // the firmware gets the CCMP header, the plaintext and the MIC
+        let mut mem = Mem(vec![0; 0x2000]);
+        for (i, d) in [BASE, BASE + 16, BASE + 32].into_iter().enumerate() {
+            mem.put(d, DESC_OWNER | 256 << 12 | 256);
+            mem.put(d + 4, BASE + 0x100 + 0x100 * i as u32);
+            mem.put(d + 8, if i < 2 { d + 16 } else { 0 });
+        }
+        mac.write(RX_BASE, BASE, 0);
+        mac.write(RX_CTRL, RX_CTRL_ENABLE, 0);
+        mac.write(
+            RA_FILTER,
+            u32::from_le_bytes(sta[..4].try_into().unwrap()),
+            0,
+        );
+        mac.write(RA_FILTER + 4, 0x0100, 0);
+        mac.write(RA_MASK, u32::MAX, 0);
+        mac.write(RA_MASK + 4, 0xffff | RA_ENABLE, 0);
+        let to_sta = |dst, key: &[u8; 16], key_id| {
+            let f = wlan::Builder::header(wlan::TYPE_DATA, 0, wlan::FROM_DS, dst, ap, ap, 2)
+                .llc(0x0800, &[0xa5; 20])
+                .build();
+            let with = wpa::insert_ccmp_header(&f, 7, key_id).unwrap();
+            (with.clone(), wpa::seal(key, &with).unwrap())
+        };
+        let (unicast, sealed) = to_sta(sta, &ptk, 0);
+        let (group, group_sealed) = to_sta(wlan::BROADCAST, &gtk, 1);
+        let mut wrong = sealed.clone();
+        *wrong.last_mut().unwrap() ^= 1;
+        for data in [sealed.clone(), wrong, group_sealed] {
+            mac.rx_frames.push_back(RxFrame {
+                data,
+                rssi: -40,
+                channel: 1,
+            });
+        }
+        assert!(mac.deliver(&mut mem, 0));
+        assert_eq!(mac.stats.rx, 2);
+        assert_eq!(mac.stats.rx_undecrypted, 1, "the wrong MIC");
+        let delivered = |buf: u32, len: usize| -> Vec<u8> {
+            (0..len.div_ceil(4))
+                .flat_map(|i| mem.get(buf + 4 * i as u32).to_le_bytes())
+                .take(len)
+                .collect()
+        };
+        for (i, (expected, sealed_len)) in [(unicast, sealed.len()), (group, sealed.len())]
+            .into_iter()
+            .enumerate()
+        {
+            let buf = BASE + 0x100 + 0x100 * i as u32;
+            assert_eq!(mem.get(buf + 44) & 0xfff, sealed_len as u32 + 4);
+            let got = delivered(buf + RX_HEADER as u32, sealed_len);
+            assert_eq!(got[..expected.len()], expected[..]);
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! What surrounds the chip's Wi-Fi: [`Air`] takes the frames the MAC sends and
-//! gives it the frames to receive. [`Network`] is an open access point with a
-//! router behind it for the chip's station, a client for the chip's own access
+//! gives it the frames to receive. [`Network`] is an access point (open, or
+//! WPA2-Personal with a passphrase) with a router behind it for the chip's station, a client for the chip's own access
 //! point, and host ports forwarded to the chip through whichever is connected.
 
 use std::collections::VecDeque;
@@ -33,14 +33,18 @@ pub mod client;
 pub mod ieee80211;
 pub mod nat;
 pub mod tcp;
+pub mod wpa;
 
 use ieee80211::Mac;
 
 /// Settings of the emulated network.
 #[derive(Clone, Debug)]
 pub struct NetworkConfig {
-    /// SSID of the open access point the chip can join.
+    /// SSID of the access point the chip can join.
     pub ssid: String,
+    /// Its WPA2-Personal passphrase (8 to 63 characters); `None` for an open
+    /// network.
+    pub passphrase: Option<String>,
     pub bssid: Mac,
     pub channel: u8,
     /// Log every frame.
@@ -56,6 +60,7 @@ impl Default for NetworkConfig {
     fn default() -> Self {
         NetworkConfig {
             ssid: "esp32s3-rax".into(),
+            passphrase: None,
             bssid: [0x02, 0xe5, 0x00, 0x00, 0x00, 0x01],
             channel: 1,
             trace: false,
@@ -94,7 +99,7 @@ pub struct Network {
 impl Network {
     pub fn new(cfg: NetworkConfig) -> Self {
         Network {
-            ap: ap::AccessPoint::new(&cfg.ssid, cfg.bssid, cfg.channel),
+            ap: ap::AccessPoint::new(&cfg.ssid, cfg.bssid, cfg.channel, cfg.passphrase.as_deref()),
             router: nat::Router::new(cfg.router.clone(), 0),
             client: client::Client::new(cfg.client_mac, 0),
             forwards: cfg
@@ -108,8 +113,16 @@ impl Network {
                     failed: false,
                 })
                 .collect(),
+            events: VecDeque::from([format!(
+                "access point {}: {}",
+                cfg.ssid,
+                if cfg.passphrase.is_some() {
+                    "WPA2-Personal"
+                } else {
+                    "open"
+                }
+            )]),
             cfg,
-            events: VecDeque::new(),
         }
     }
 

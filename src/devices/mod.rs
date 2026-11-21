@@ -6,6 +6,7 @@
 //! completion, end of an LCD transfer) is due. Times are in ticks of
 //! [`TICK_HZ`].
 
+pub mod aes;
 pub mod cache;
 pub mod efuse;
 pub mod gdma;
@@ -26,6 +27,7 @@ pub mod uart;
 pub mod usb_serial_jtag;
 pub mod wifi_mac;
 
+use self::aes::Aes;
 use cache::Cache;
 use efuse::Efuse;
 use gdma::Gdma;
@@ -109,6 +111,7 @@ pub struct Peripherals {
     pub psram: Psram,
     pub cache: Cache,
     pub sha: Sha,
+    pub aes: Aes,
     pub sens: Sens,
     pub gdma: Gdma,
     pub lcd_cam: LcdCam,
@@ -184,6 +187,7 @@ impl Peripherals {
             psram: Psram::new(cfg.psram),
             cache: Cache::new(),
             sha: Sha::new(),
+            aes: Aes::new(),
             sens: Sens::new(),
             gdma: Gdma::new(),
             lcd_cam: LcdCam::new(),
@@ -216,6 +220,7 @@ impl Peripherals {
         self.flash.reset();
         self.cache.reset();
         self.sha.reset();
+        self.aes.reset();
         self.sens.reset();
         self.gdma.reset();
         self.lcd_cam.reset();
@@ -362,6 +367,7 @@ impl Peripherals {
             }
             0x6_0033..=0x6_0035 => self.wifi.read(addr - WIFI_MAC_BASE, now),
             0x6_0038 => self.usb_serial_jtag.read(off),
+            0x6_003a => self.aes.read(off),
             0x6_003b => self.sha.read(off),
             0x6_003f => self.gdma.read(off),
             0x6_0041 => self.lcd_cam.read(off),
@@ -414,6 +420,10 @@ impl Peripherals {
                 true
             }
             0x6_0038 => self.usb_serial_jtag.write(off, v),
+            0x6_003a => {
+                self.aes.write(off, v);
+                false
+            }
             0x6_003b => {
                 self.sha.write(off, v);
                 false
