@@ -58,8 +58,13 @@ impl Systimer {
         }
     }
 
-    pub fn reset(&mut self) {
+    /// A system reset at `now`: the counters restart from zero.
+    pub fn reset(&mut self, now: u64) {
         self.conf = 0x4600_0000;
+        self.units = [Unit {
+            base_time: now,
+            ..Unit::default()
+        }; 2];
         self.comps = [Comparator::default(); 3];
         self.int_ena = 0;
         self.int_raw = 0;

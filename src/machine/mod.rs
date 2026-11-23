@@ -145,7 +145,7 @@ impl Esp32s3 {
     pub fn reset(&mut self) {
         self.cpu.reset();
         self.app.reset();
-        self.soc.periph.reset();
+        self.soc.periph.reset(self.now);
         self.soc.invalidate_fetch();
     }
 

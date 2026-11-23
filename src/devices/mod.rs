@@ -201,7 +201,7 @@ impl Peripherals {
     }
 
     /// System reset: every peripheral but RTC_CNTL, the eFuses and the flash array.
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self, now: u64) {
         self.system.reset();
         self.intmatrix.reset();
         for u in &mut self.uart {
@@ -211,7 +211,7 @@ impl Peripherals {
         for t in &mut self.timg {
             t.reset();
         }
-        self.systimer.reset();
+        self.systimer.reset(now);
         self.gpio.reset();
         for i in &mut self.i2c {
             i.reset();
