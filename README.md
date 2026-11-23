@@ -6,6 +6,22 @@ models the rest of the chip: the memory map, the boot from the internal ROM, and
 The board around the chip talks to it through the peripherals, and the chip's Wi-Fi to an emulated
 network. [bitaxe-emu-rs](https://github.com/bitaxeorg/bitaxe-emu-rs) builds the Bitaxe boards on it.
 
+## Building
+
+rax is not on crates.io yet, so this crate takes it by path from `../upstream/rax`: a checkout of
+its `feat/xtensa-esp32s3` branch in an `upstream` directory beside this one. Its repository is large (its
+documents take about 2.7 GB); cargo reads only `Cargo.toml`, `Cargo.lock`, `LICENSE`, `LICENSES`,
+`THIRD_PARTY_NOTICES.md`, `src`, `capi` and `vendor/vm-memory`:
+
+```bash
+git clone --filter=blob:none --no-checkout -b feat/xtensa-esp32s3 \
+  https://github.com/Georges760/rax ../upstream/rax
+cd ../upstream/rax
+git sparse-checkout set --no-cone /Cargo.toml /Cargo.lock /LICENSE /LICENSES \
+  /THIRD_PARTY_NOTICES.md /src /capi /vendor/vm-memory
+git checkout feat/xtensa-esp32s3
+```
+
 ## Running an image
 
 ```bash
@@ -15,10 +31,11 @@ cargo run --release --bin esp32s3-run -- \
 
 It prints the console (UART0 and USB-Serial-JTAG) on stdout and writes the RTT up-buffer 0 to a
 file, then reports the exceptions, the unmodelled registers touched and, with `--profile`, the
-opcodes executed. `ESP32S3_I2C_TRACE=1` traces the I2C command lists. The ROM image ships with
-Espressif's QEMU (`pc-bios/esp32s3_rev0_rom.bin`). `--rom` defaults to the path in `ESP32S3_ROM`
-at build time (the Nix package fetches the image and sets it), else to
-`../upstream/qemu-espressif/pc-bios/esp32s3_rev0_rom.bin` from this checkout.
+opcodes executed. `ESP32S3_I2C_TRACE=1` traces the I2C command lists. The ROM image is not
+included: it ships with Espressif's QEMU ([espressif/qemu](https://github.com/espressif/qemu),
+`pc-bios/esp32s3_rev0_rom.bin`). `--rom` defaults to the path in `ESP32S3_ROM` at build time
+(bitaxe-emu-rs's Nix package fetches the image and sets it), else to
+`../upstream/qemu-espressif/pc-bios/esp32s3_rev0_rom.bin` from this crate's directory.
 
 ## Embedding
 
@@ -62,3 +79,7 @@ The register behaviour of Espressif QEMU's ESP32-S3 device models is written up 
 | A12 | An i8080 transfer takes one LCD_PCLK cycle per command word, dummy cycle and data cycle, with no setup or hold cycles | LCD_USER/LCD_MISC field descriptions of the PAC; the requested timing (4 MHz, 6400 bytes ≈ 1.6 ms) | LCD transfer end time | LCD_VFK/VBK_CYCLELEN set to large values | Capture of WR on a real board | retained |
 | A13 | Running the two cores one after the other in each time slice (up to 2000 instructions each) is indistinguishable for firmware that synchronises them with spinlocks (S32C1I), shared memory and FROM_CPU interrupts | ESP-IDF SMP uses those mechanisms only | dual-core runs | handshakes timed in cycles between the cores | a firmware waiting for the other core within a few hundred cycles times out | retained |
 | A14 | The octal PSRAM is an 8 MB AP Memory device (MR1 vendor 0x0D, MR2 density 3, generation 3) that returns what was written at every timing setting | the N16R8 modules of the Bitaxe boards; ESP-IDF 6.0.2 reads MR0-MR8 and checks the vendor | PSRAM init and memory test | MSPI timing tuning finds every point passing and falls back to its default point ("tuning fail") | compare the PSRAM log lines with a real board | retained |
+
+## Licence
+
+MIT or Apache-2.0, at your option.

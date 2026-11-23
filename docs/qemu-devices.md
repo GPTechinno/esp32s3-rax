@@ -2,7 +2,7 @@
 
 # ESP32-S3 peripheral behaviour in Espressif QEMU: register-level spec
 
-Source: `upstream/qemu-espressif`, branch `esp-develop`, commit `7ca512d1f1`.
+Source: [espressif/qemu](https://github.com/espressif/qemu), branch `esp-develop`, commit `7ca512d1f1`.
 This file describes what QEMU's models *do*. It does not say what the silicon does. Where the two differ in ways firmware will notice, the difference is flagged with **QUIRK** (QEMU does something the silicon does not) or **UNMODELLED** (the register exists on silicon but QEMU ignores it).
 
 Conventions used throughout:

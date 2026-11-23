@@ -5,12 +5,28 @@ edition = "2024"
 description = "ESP32-S3 SoC emulator: rax's Xtensa LX7 core with the memory map, the boot from the internal ROM, the peripherals and a Wi-Fi network"
 repository = "https://github.com/GPTechinno/esp32s3-rax"
 license = "MIT OR Apache-2.0"
+authors = ["Georges Palauqui <g.palauqui@gptechinno.com>"]
+readme = "README.md"
+keywords = ["esp32s3", "esp32", "emulator", "xtensa", "wifi"]
+categories = ["emulators", "embedded", "simulation"]
+include = [
+    "/src/**/*.rs",
+    "/docs/*.md",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
+]
 
 [[bin]]
 name = "esp32s3-run"
 path = "src/bin/esp32s3-run.rs"
 
 [dependencies]
+# rax with its Xtensa interpreter, from a checkout of the `feat/xtensa-esp32s3` branch of
+# https://github.com/Georges760/rax; a version goes next to the path once rax is on crates.io
+# (its crates.io name: `rax` there is another crate)
 rax = { path = "../upstream/rax", default-features = false }
 clap = { version = "4.6", features = ["derive"] }
 goblin = "0.10"
