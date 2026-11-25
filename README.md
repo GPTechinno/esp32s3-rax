@@ -8,15 +8,15 @@ network. [bitaxe-emu-rs](https://github.com/bitaxeorg/bitaxe-emu-rs) builds the 
 
 ## Building
 
-rax is not on crates.io yet, so this crate takes it by path from `../upstream/rax`: a checkout of
-its `feat/xtensa-esp32s3` branch in an `upstream` directory beside this one. Its repository is large (its
+rax is not on crates.io yet, so this crate takes it by path from `../../upstream/rax`: a checkout of
+its `feat/xtensa-esp32s3` branch in an `upstream` directory beside the `emulator` directory holding this crate. Its repository is large (its
 documents take about 2.7 GB); cargo reads only `Cargo.toml`, `Cargo.lock`, `LICENSE`, `LICENSES`,
 `THIRD_PARTY_NOTICES.md`, `src`, `capi` and `vendor/vm-memory`:
 
 ```bash
 git clone --filter=blob:none --no-checkout -b feat/xtensa-esp32s3 \
-  https://github.com/Georges760/rax ../upstream/rax
-cd ../upstream/rax
+  https://github.com/Georges760/rax ../../upstream/rax
+cd ../../upstream/rax
 git sparse-checkout set --no-cone /Cargo.toml /Cargo.lock /LICENSE /LICENSES \
   /THIRD_PARTY_NOTICES.md /src /capi /vendor/vm-memory
 git checkout feat/xtensa-esp32s3
@@ -35,7 +35,7 @@ opcodes executed. `ESP32S3_I2C_TRACE=1` traces the I2C command lists. The ROM im
 included: it ships with Espressif's QEMU ([espressif/qemu](https://github.com/espressif/qemu),
 `pc-bios/esp32s3_rev0_rom.bin`). `--rom` defaults to the path in `ESP32S3_ROM` at build time
 (bitaxe-emu-rs's Nix package fetches the image and sets it), else to
-`../upstream/qemu-espressif/pc-bios/esp32s3_rev0_rom.bin` from this crate's directory.
+`../../upstream/qemu-espressif/pc-bios/esp32s3_rev0_rom.bin` from this crate's directory.
 
 ## Embedding
 

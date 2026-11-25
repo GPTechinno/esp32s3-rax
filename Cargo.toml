@@ -27,7 +27,7 @@ path = "src/bin/esp32s3-run.rs"
 # rax with its Xtensa interpreter, from a checkout of the `feat/xtensa-esp32s3` branch of
 # https://github.com/Georges760/rax; a version goes next to the path once rax is on crates.io
 # (its crates.io name: `rax` there is another crate)
-rax = { path = "../upstream/rax", default-features = false }
+rax = { path = "../../upstream/rax", default-features = false }
 clap = { version = "4.6", features = ["derive"] }
 goblin = "0.10"
 sha2 = { version = "0.10", features = ["compress"] }

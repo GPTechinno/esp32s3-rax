@@ -15,6 +15,6 @@ pub const DEFAULT_ROM: &str = match option_env!("ESP32S3_ROM") {
     Some(path) => path,
     None => concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../upstream/qemu-espressif/pc-bios/esp32s3_rev0_rom.bin"
+        "/../../upstream/qemu-espressif/pc-bios/esp32s3_rev0_rom.bin"
     ),
 };
