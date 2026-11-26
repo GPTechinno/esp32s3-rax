@@ -8,19 +8,12 @@ network. [bitaxe-emu-rs](https://github.com/bitaxeorg/bitaxe-emu-rs) builds the 
 
 ## Building
 
-rax is not on crates.io yet, so this crate takes it by path from `../../upstream/rax`: a checkout of
-its `feat/xtensa-esp32s3` branch in an `upstream` directory beside the `emulator` directory holding this crate. Its repository is large (its
-documents take about 2.7 GB); cargo reads only `Cargo.toml`, `Cargo.lock`, `LICENSE`, `LICENSES`,
-`THIRD_PARTY_NOTICES.md`, `src`, `capi` and `vendor/vm-memory`:
-
-```bash
-git clone --filter=blob:none --no-checkout -b feat/xtensa-esp32s3 \
-  https://github.com/Georges760/rax ../../upstream/rax
-cd ../../upstream/rax
-git sparse-checkout set --no-cone /Cargo.toml /Cargo.lock /LICENSE /LICENSES \
-  /THIRD_PARTY_NOTICES.md /src /capi /vendor/vm-memory
-git checkout feat/xtensa-esp32s3
-```
+rax is not on crates.io yet, so this crate takes it from git: the `feat/xtensa-esp32s3` branch of
+[Georges760/rax](https://github.com/Georges760/rax). Cargo checks out the whole repository, its
+research documents included: about 3.5 GB in `~/.cargo/git`. It reads only `Cargo.toml`,
+`Cargo.lock`, `LICENSE`, `LICENSES`, `THIRD_PARTY_NOTICES.md`, `src`, `capi` and
+`vendor/vm-memory`, so a package can build from a sparse checkout of those instead, as a path
+dependency (bitaxe-emu-rs's Nix package does).
 
 ## Running an image
 
